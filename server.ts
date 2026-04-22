@@ -2760,8 +2760,8 @@ app.use('*', (req, res) => {
     });
   };
 
-  const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Nexus Proxy Server running on http://localhost:${PORT}`);
+    const server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Nexus Proxy Server running on http://0.0.0.0:${PORT}`);
   });
 
   wss = new WebSocketServer({ server, path: '/ws' });
