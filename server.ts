@@ -2742,11 +2742,7 @@ async function startServer() {
   });
 
   // Serve static files and handle SPA routing
-app.use('/api', (req, res, next) => {
-  next();
-});
-
-app.use('*', (req, res) => {
+app.use((req, res) => {
   res.status(404).json({ error: 'API endpoint not found' });
 });
 
