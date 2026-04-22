@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 // import { createServer as createViteServer } from 'vite';
 import cors from 'cors';
+import path from 'path';  
 import { createProxyMiddleware } from 'http-proxy-middleware';
 
 import { fileURLToPath } from 'url';
