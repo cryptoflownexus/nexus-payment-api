@@ -3,7 +3,7 @@ import express from 'express';
 // import { createServer as createViteServer } from 'vite';
 import cors from 'cors';
 import { createProxyMiddleware } from 'http-proxy-middleware';
-import path from 'path';
+
 import { fileURLToPath } from 'url';
 import ccxt, { binance, bitget } from 'ccxt';
 import { PassThrough } from 'stream';
@@ -2741,19 +2741,13 @@ async function startServer() {
   });
 
   // Serve static files and handle SPA routing
-  if (process.env.NODE_ENV !== 'production') {
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    app.use(express.static(path.join(__dirname, 'dist')));
-    app.get('*all', (req, res) => {
-      res.sendFile(path.join(__dirname, 'dist', 'index.html'));
-    });
-  }
+app.use('/api', (req, res, next) => {
+  next();
+});
+
+app.use('*', (req, res) => {
+  res.status(404).json({ error: 'API endpoint not found' });
+});
 
   // WebSocket setup
   let wss: WebSocketServer;
