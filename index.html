@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en" class="dark" style="background-color: #020617; color-gamut: srgb;">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="description" content="CryptoFlow Intelligence Station - Nexus Core v7.3.0 Institutional Grade Terminal" />
+    <title>CryptoFlow Nexus Terminal</title>
+
+    <!-- Content Security Policy -->
+    <meta http-equiv="Content-Security-Policy" content="
+      default-src 'self' tauri: https://tauri.localhost http://localhost:* data: blob: 'unsafe-inline' 'unsafe-eval';
+      script-src 'self' tauri: https://tauri.localhost http://localhost:* https://cdn.tailwindcss.com https://ai.studio * data: blob: 'unsafe-inline' 'unsafe-eval';
+      connect-src 'self' tauri: https://tauri.localhost http://localhost:* https://*.coinglass.com https://*.binance.com https://*.bitget.com https://pro-api.coinmarketcap.com https://*.googleapis.com https://generativelanguage.googleapis.com https://anyxhyjdjxxxcvadyjjk.supabase.co * data: blob: ws: wss:;
+      style-src 'self' tauri: https://tauri.localhost http://localhost:* https://fonts.googleapis.com 'unsafe-inline';
+      font-src 'self' tauri: https://tauri.localhost http://localhost:* https://fonts.gstatic.com data:;
+      img-src 'self' tauri: asset: https://*.binance.com https://lucide.dev * data: blob:;
+      media-src 'self' tauri: https://assets.mixkit.co * data: blob:;
+      frame-src 'self' tauri: https://ai.studio * data: blob:;
+      worker-src 'self' blob:;
+    ">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+
+    <script>
+      // Define sseError in the global scope immediately
+      (function() {
+        var sseError = function(err) {
+          console.warn("⚠️ SSE Error intercepted:", err);
+        };
+        window.sseError = sseError;
+        if (typeof globalThis !== 'undefined') {
+          globalThis.sseError = sseError;
+        }
+
+        // Fix for Supabase OAuth gotrue-js TypeError when testing in some environments
+        if (typeof window.wx === 'undefined') window.wx = {};
+        if (typeof window.Telegram === 'undefined') window.Telegram = { WebApp: {} };
+      })();
+
+      (function() {
+        try {
+          const theme = localStorage.getItem('CRYPTOFLOW_THEME') || 'dark';
+          document.documentElement.classList.toggle('dark', theme === 'dark');
+        } catch(e) {}
+      })();
+    </script>
+
+    <style>
+      #nexus-boot-loader {
+        position: fixed;
+        inset: 0;
+        background: #020617;
+        z-index: 99999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        transition: opacity 0.6s cubic-bezier(0.4, 0, 0.2, 1), visibility 0.6s;
+        font-family: 'Inter', sans-serif;
+      }
+      .boot-logo {
+        width: 60px; height: 60px;
+        background: linear-gradient(135deg, #2563eb, #10b981);
+        border-radius: 16px;
+        display: flex; align-items: center; justify-content: center;
+        color: white; font-weight: 900; font-size: 24px;
+        box-shadow: 0 0 30px rgba(37, 99, 235, 0.3);
+        margin-bottom: 20px;
+        animation: pulse-glow 2s infinite alternate;
+      }
+      .boot-text { color: #94a3b8; font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.3em; margin-bottom: 12px; opacity: 0.7; }
+      .boot-bar-container { width: 160px; height: 2px; background: rgba(255, 255, 255, 0.05); border-radius: 10px; overflow: hidden; position: relative; }
+      .boot-bar-progress { position: absolute; height: 100%; width: 30%; background: #2563eb; box-shadow: 0 0 10px #2563eb; animation: loading-slide 1.2s infinite ease-in-out; }
+      @keyframes pulse-glow { 0% { transform: scale(1); filter: brightness(1); } 100% { transform: scale(1.05); filter: brightness(1.2); } }
+      @keyframes loading-slide { 0% { left: -30%; } 100% { left: 100%; } }
+      .bg-grid-pattern { background-image: radial-gradient(rgba(37, 99, 235, 0.1) 1px, transparent 1px); background-size: 30px 30px; }
+      body { margin: 0; background-color: #020617; }
+    </style>
+
+  </head>
+  <body class="bg-slate-950 text-slate-100 antialiased overflow-x-hidden">
+    <div id="nexus-boot-loader">
+      <div class="absolute inset-0 bg-grid-pattern opacity-20 pointer-events-none"></div>
+      <div class="boot-logo">NX</div>
+      <div class="boot-text">Initializing Nexus Core</div>
+      <div class="boot-bar-container"><div class="boot-bar-progress"></div></div>
+      <div id="boot-emergency-bypass" style="display: none; margin-top: 30px; z-index: 100;">
+        <button onclick="document.getElementById('nexus-boot-loader').style.display='none'" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: #94a3b8; padding: 8px 16px; border-radius: 8px; font-size: 9px; font-weight: 900; cursor: pointer; letter-spacing: 0.2em; text-transform: uppercase;">Bypass Loader</button>
+      </div>
+      <div class="absolute bottom-8 text-[7px] font-black text-slate-700 uppercase tracking-[0.4em]">Protected Institutional Access</div>
+    </div>
+    <div id="root"></div>
+    <script>
+      // Ultimate safety: show bypass button after 8 seconds
+      setTimeout(function() {
+        var bypass = document.getElementById('boot-emergency-bypass');
+        if (bypass) bypass.style.display = 'block';
+      }, 8000);
+      
+      // Force hide after 15 seconds no matter what
+      setTimeout(function() {
+        var loader = document.getElementById('nexus-boot-loader');
+        if (loader && loader.style.display !== 'none') {
+          console.warn("Ultimate safety timeout: Hiding loader");
+          loader.style.display = 'none';
+        }
+      }, 15000);
+    </script>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>

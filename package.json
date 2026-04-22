@@ -1,0 +1,50 @@
+{
+  "name": "cryptoflow-Nexus-pro",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx server.ts",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "tsc --noEmit",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "dependencies": {
+    "@google/genai": "^1.50.1",
+    "@supabase/supabase-js": "^2.103.3",
+    "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/plugin-http": "^2.5.8",
+    "@tauri-apps/plugin-shell": "^2.0.0",
+    "ccxt": "^4.5.42",
+    "clsx": "^2.1.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "framer-motion": "^12.34.2",
+    "http-proxy-middleware": "^3.0.5",
+    "lucide-react": "^0.563.0",
+    "p-queue": "^9.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "recharts": "^2.12.7",
+    "stripe": "^22.0.2",
+    "tailwind-merge": "^2.3.0",
+    "tsx": "^4.21.0",
+    "zustand": "^5.0.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.17",
+    "postcss": "^8.4.35",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5.3.3",
+    "vite": "^5.4.0",
+    "vite-plugin-javascript-obfuscator": "^3.1.0"
+  }
+}
