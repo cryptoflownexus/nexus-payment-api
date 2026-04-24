@@ -2,9 +2,8 @@ import 'dotenv/config';
 import express from 'express';
 // import { createServer as createViteServer } from 'vite';
 import cors from 'cors';
-import path from 'path';  
 import { createProxyMiddleware } from 'http-proxy-middleware';
-
+import path from 'path';
 import { fileURLToPath } from 'url';
 import ccxt, { binance, bitget } from 'ccxt';
 import { PassThrough } from 'stream';
@@ -30,10 +29,22 @@ function getStripe(): Stripe {
 
 
 // ============================================================
-// 🔥 GLOBAL STATE FOR ACTIVE ORDERS
+// 🔥 GLOBAL STATE FOR ACTIVE ORDERS & DIAGNOSTICS
 // ============================================================
 const activeTrailingOrders = new Map<string, any>();
 const activeAlgoOrders = new Map<string, any>();
+const webhookLogs: any[] = [];
+
+function addWebhookLog(gateway: string, type: string, status: string, details: any) {
+  webhookLogs.push({
+    timestamp: new Date().toISOString(),
+    gateway,
+    type,
+    status,
+    details
+  });
+  if (webhookLogs.length > 50) webhookLogs.shift();
+}
 
 // Helper function for rounding to tick size
 function roundToTick(value: number, tickSize: number): number {
@@ -306,51 +317,73 @@ async function startServer() {
   app.post('/api/webhooks/stripe', express.raw({type: 'application/json'}), async (req, res) => {
     console.log('[Stripe Webhook] Received event');
     const sig = req.headers['stripe-signature'];
-    const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET?.trim();
 
     let event;
     try {
       if (!endpointSecret) {
         console.error('[Stripe Webhook] Missing STRIPE_WEBHOOK_SECRET');
+        addWebhookLog('stripe', 'unknown', 'error', 'Missing STRIPE_WEBHOOK_SECRET');
         return res.status(400).send("Missing STRIPE_WEBHOOK_SECRET");
       }
       const stripe = getStripe();
       event = stripe.webhooks.constructEvent(req.body, sig as string, endpointSecret);
     } catch (err: any) {
       console.error(`[Stripe Webhook] Error:`, err.message);
+      addWebhookLog('stripe', 'unknown', 'error', `Construct Error: ${err.message}`);
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
+
+    addWebhookLog('stripe', event.type, 'received', { id: event.id });
 
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object as any;
       const userId = session.metadata?.userId;
       const planId = session.metadata?.planId || 'premium';
 
-      if (userId && process.env.SUPABASE_SERVICE_ROLE_KEY) {
-        try {
-          const { createClient } = await import('@supabase/supabase-js');
-          const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
-          const supabase = createClient(supabaseUrl, process.env.SUPABASE_SERVICE_ROLE_KEY);
-          
-          await supabase.from('profiles').update({
-            plan_tier: planId,
-            subscription_status: 'active',
-            stripe_customer_id: session.customer
-          }).eq('id', userId);
+      if (userId) {
+        if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+          try {
+            const { createClient } = await import('@supabase/supabase-js');
+            const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
+            const supabase = createClient(supabaseUrl, process.env.SUPABASE_SERVICE_ROLE_KEY);
+            
+            const { error: profileError } = await supabase.from('profiles').update({
+              plan_tier: planId,
+              subscription_status: 'active',
+              stripe_customer_id: session.customer
+            }).eq('id', userId);
 
-          await supabase.from('payment_history').insert({
-            user_id: userId,
-            gateway: 'stripe',
-            transaction_id: session.id,
-            amount: session.amount_total / 100,
-            currency: session.currency?.toUpperCase() || 'USD',
-            status: 'paid',
-            description: `Checkout for ${planId}`
-          });
-          console.log(`[Stripe Webhook] Successfully updated user ${userId} to plan ${planId}`);
-        } catch (dbErr) {
-          console.error('[Stripe Webhook] Database update failed:', dbErr);
+            if (profileError) {
+               console.error('[Stripe Webhook] Error updating profile:', profileError);
+               // Try a fallback update with fewer fields in case stripe_customer_id column is missing
+               const { error: fallbackError } = await supabase.from('profiles').update({
+                  plan_tier: planId,
+                  subscription_status: 'active'
+                 }).eq('id', userId);
+               if (fallbackError) console.error('[Stripe Webhook] Fallback profile update also failed:', fallbackError);
+            }
+
+            const { error: paymentError } = await supabase.from('payment_history').insert({
+              user_id: userId,
+              gateway: 'stripe',
+              transaction_id: session.id,
+              amount: session.amount_total ? session.amount_total / 100 : 0,
+              currency: session.currency?.toUpperCase() || 'USD',
+              status: 'paid',
+              description: `Checkout for ${planId}`
+            });
+            if (paymentError) console.error('[Stripe Webhook] Error inserting payment history:', paymentError);
+
+            console.log(`[Stripe Webhook] Process finished for user ${userId} to plan ${planId}`);
+          } catch (dbErr) {
+            console.error('[Stripe Webhook] Database update failed:', dbErr);
+          }
+        } else {
+            console.error('[Stripe Webhook] FATAL: Missing SUPABASE_SERVICE_ROLE_KEY in environment block! Database cannot be updated.');
         }
+      } else {
+        console.warn(`[Stripe Webhook] Received webhook but no userId in metadata.`);
       }
     }
 
@@ -448,7 +481,7 @@ async function startServer() {
           quantity: 1,
         }],
         mode: 'payment',
-        success_url: successUrl || (origin + '?payment=success'),
+        success_url: successUrl || (origin + '?payment=success&provider=stripe&session_id={CHECKOUT_SESSION_ID}'),
         cancel_url: cancelUrl || (origin + '?payment=canceled'),
       });
 
@@ -487,8 +520,8 @@ async function startServer() {
             invoice_reminder: ['email', 'whatsapp'],
             invoice_paid: ['email', 'whatsapp']
           },
-          success_redirect_url: successUrl || origin || 'http://localhost:3000',
-          failure_redirect_url: cancelUrl || origin || 'http://localhost:3000',
+          success_redirect_url: successUrl ? successUrl.replace('XENDIT_EXTERNAL_ID_PLACEHOLDER', externalId) : (origin + `?payment=success&provider=xendit&external_id=${externalId}`),
+          failure_redirect_url: cancelUrl || (origin + '?payment=canceled'),
           metadata: {
             userId: userId || '',
             planId: planId || ''
@@ -511,43 +544,183 @@ async function startServer() {
   // ===================================
   // XENDIT WEBHOOK
   // ===================================
+  // XENDIT WEBHOOK
+  // ===================================
   app.post('/api/webhooks/xendit', async (req, res) => {
     console.log('[Xendit Webhook] Received webhook');
+    
+    // Validate Xendit Token
+    const xenditToken = process.env.XENDIT_WEBHOOK_TOKEN?.trim();
+    const reqToken = req.headers['x-callback-token'];
+
+    if (xenditToken && reqToken !== xenditToken) {
+      console.error('[Xendit Webhook] INVALID TOKEN DETECTED', { 
+         expected: xenditToken ? 'SET' : 'NOT_SET', 
+         received: reqToken ? 'SET' : 'NOT_SET' 
+      });
+      addWebhookLog('xendit', 'callback', 'error', 'Invalid Token');
+      return res.status(403).json({ error: 'Unauthorized webhook' });
+    }
+
     const invoice = req.body;
+    addWebhookLog('xendit', 'paid', 'received', { id: invoice?.id, external_id: invoice?.external_id, status: invoice?.status });
     
     // Accept it to prevent retries
     res.json({ received: true });
 
     if (invoice.status === 'PAID') {
       const userId = invoice.metadata?.userId;
-      const planId = invoice.metadata?.planId || 'premium';
+      const planId = (invoice.metadata?.planId || 'premium').toLowerCase();
 
-      if (userId && process.env.SUPABASE_SERVICE_ROLE_KEY) {
-         try {
-            const { createClient } = await import('@supabase/supabase-js');
-            const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
-            const supabase = createClient(supabaseUrl, process.env.SUPABASE_SERVICE_ROLE_KEY);
-            
-            await supabase.from('profiles').update({
+      console.log(`[Xendit Webhook] Processing payment for User: ${userId}, Plan: ${planId}`);
+
+      if (userId) {
+        if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+           try {
+              const { createClient } = await import('@supabase/supabase-js');
+              const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
+              const supabase = createClient(supabaseUrl, process.env.SUPABASE_SERVICE_ROLE_KEY);
+              
+              // Force lowercase for plan_tier to match frontend logic
+              const { error: profileError } = await supabase.from('profiles').update({
+                plan_tier: planId,
+                subscription_status: 'active',
+                xendit_customer_id: invoice.customer_id || 'xendit-guest',
+                updated_at: new Date().toISOString()
+              }).eq('id', userId);
+
+              if (profileError) {
+                 console.error('[Xendit Webhook] Error updating profile:', profileError);
+                 // Fallback without xendit_customer_id in case column is missing
+                 const { error: fallbackError } = await supabase.from('profiles').update({
+                    plan_tier: planId,
+                    subscription_status: 'active'
+                   }).eq('id', userId);
+                 if (fallbackError) console.error('[Xendit Webhook] Fallback profile update also failed:', fallbackError);
+              }
+
+              const { error: paymentError } = await supabase.from('payment_history').insert({
+                user_id: userId,
+                gateway: 'xendit',
+                transaction_id: invoice.id,
+                amount: invoice.amount,
+                currency: 'IDR',
+                status: 'paid',
+                description: `Invoice ${invoice.external_id} Paid`
+              });
+              if (paymentError) console.error('[Xendit Webhook] Error inserting payment history:', paymentError);
+
+              console.log(`[Xendit Webhook] Process finished for user ${userId}`);
+           } catch (dbErr) {
+              console.error('[Xendit Webhook] Database update failed:', dbErr);
+           }
+        } else {
+           console.error('[Xendit Webhook] FATAL: Missing SUPABASE_SERVICE_ROLE_KEY in environment block! Database cannot be updated.');
+        }
+      } else {
+         console.warn('[Xendit Webhook] Received paid status but no userId in metadata.');
+      }
+    }
+  });
+
+  // ===================================
+  // VERIFY PAYMENT FROM SUCCESS REDIRECT (Client Fallback)
+  // ===================================
+  app.get('/api/payment/verify', async (req, res) => {
+    try {
+      const { provider, session_id, external_id } = req.query;
+
+      if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+        return res.status(500).json({ error: 'Supabase Server Credentials Missing' });
+      }
+
+      const { createClient } = await import('@supabase/supabase-js');
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
+      const supabase = createClient(supabaseUrl, process.env.SUPABASE_SERVICE_ROLE_KEY);
+
+      if (provider === 'stripe' && session_id) {
+        const stripe = getStripe();
+        const session = await stripe.checkout.sessions.retrieve(session_id as string);
+        if (session && session.payment_status === 'paid') {
+          const userId = session.metadata?.userId;
+          const planId = session.metadata?.planId;
+          if (userId && planId) {
+            const { error: updateErr } = await supabase.from('profiles').update({
               plan_tier: planId,
               subscription_status: 'active',
-              xendit_customer_id: invoice.customer_id || 'xendit-guest'
+              stripe_customer_id: session.customer as string
             }).eq('id', userId);
 
+            if (updateErr) {
+               console.error('[Verify API Error] Failed to update profiles in DB:', updateErr);
+               return res.status(500).json({ error: `Database update failed: ${updateErr.message}` });
+            }
+
+            // Insert into payment history
             await supabase.from('payment_history').insert({
               user_id: userId,
-              gateway: 'xendit',
-              transaction_id: invoice.id,
-              amount: invoice.amount,
-              currency: 'IDR',
+              gateway: 'stripe',
+              transaction_id: session.id,
+              amount: session.amount_total ? session.amount_total / 100 : 0,
+              currency: session.currency?.toUpperCase() || 'USD',
               status: 'paid',
-              description: `Invoice ${invoice.external_id} Paid`
+              description: `Subscription Upgrade to ${planId.toUpperCase()}`
             });
-            console.log(`[Xendit Webhook] Successfully updated user ${userId}`);
-         } catch (dbErr) {
-            console.error('[Xendit Webhook] Database update failed:', dbErr);
-         }
+            
+            // Also log to webhook logs for diagnostic visibility
+            addWebhookLog('stripe', 'client-verify', 'success', { session_id, planId, userId });
+            return res.json({ success: true, verified: true, plan_tier: planId });
+          }
+        }
+      } else if (provider === 'xendit' && external_id) {
+        const key = process.env.XENDIT_SECRET_KEY || "xnd_development_dummy"; 
+        const response = await fetch(`https://api.xendit.co/v2/invoices?external_id=${external_id}`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Basic ${Buffer.from(key + ':').toString('base64')}`
+          }
+        });
+        const data = await response.json();
+        
+        if (data && data.length > 0) {
+           const matchingInvoice = data.find((inv: any) => inv.status === 'PAID');
+           if (matchingInvoice) {
+              const userId = matchingInvoice.metadata?.userId;
+              const planId = (matchingInvoice.metadata?.planId || 'premium').toLowerCase();
+              if (userId && planId) {
+                const { error: updateErr } = await supabase.from('profiles').update({
+                  plan_tier: planId,
+                  subscription_status: 'active',
+                  updated_at: new Date().toISOString()
+                }).eq('id', userId);
+
+                if (updateErr) {
+                   console.error('[Verify API Error] Failed to update profiles in DB:', updateErr);
+                   return res.status(500).json({ error: `Database update failed: ${updateErr.message}` });
+                }
+
+                // Insert into payment history
+                await supabase.from('payment_history').insert({
+                  user_id: userId,
+                  gateway: 'xendit',
+                  transaction_id: matchingInvoice.id,
+                  amount: matchingInvoice.amount,
+                  currency: 'IDR',
+                  status: 'paid',
+                  description: `Subscription Upgrade to ${planId.toUpperCase()}`
+                });
+                
+                addWebhookLog('xendit', 'client-verify', 'success', { external_id, planId, userId });
+                return res.json({ success: true, verified: true, plan_tier: planId });
+              }
+           }
+        }
       }
+      
+      return res.json({ success: true, verified: false });
+    } catch (err: any) {
+      console.error('[Verify API Error]:', err);
+      res.status(500).json({ error: err.message });
     }
   });
 
@@ -2249,7 +2422,8 @@ async function startServer() {
       }
 
       if (!exchangeKeys || !exchangeKeys.apiKey) {
-        return res.status(400).json({ success: false, error: "Exchange credentials required" });
+        // Return gracefully to prevent logs/console spam on client empty state
+        return res.json([]);
       }
 
       const exchangeType = (bitget || exchangeKeys === req.body.bitget) ? 'bitget' : (binance ? 'binance' : 'bitget');
@@ -2732,6 +2906,29 @@ async function startServer() {
     }
   }));
 
+  // ===================================
+  // DIAGNOSTICS & HEALTH
+  // ===================================
+  app.get('/api/diag/status', (req, res) => {
+    res.json({
+      status: 'online',
+      timestamp: new Date().toISOString(),
+      env: {
+        STRIPE_SET: !!process.env.STRIPE_SECRET_KEY,
+        STRIPE_WEBHOOK_SET: !!process.env.STRIPE_WEBHOOK_SECRET,
+        XENDIT_SET: !!process.env.XENDIT_SECRET_KEY,
+        XENDIT_WEBHOOK_SET: !!process.env.XENDIT_WEBHOOK_TOKEN,
+        SUPABASE_SET: !!process.env.VITE_SUPABASE_URL,
+        SUPABASE_SERVICE_ROLE_SET: !!process.env.SUPABASE_SERVICE_ROLE_KEY
+      },
+      webhooks: webhookLogs.slice().reverse()
+    });
+  });
+
+  app.get('/api/health', (req, res) => {
+    res.json({ status: 'ok', uptime: process.uptime() });
+  });
+
   app.all(/^\/api\/.*/, (req, res) => {
     console.warn(`[Server] API Route not found: ${req.method} ${req.path}`);
     res.status(404).json({ 
@@ -2742,9 +2939,19 @@ async function startServer() {
   });
 
   // Serve static files and handle SPA routing
-app.use((req, res) => {
-  res.status(404).json({ error: 'API endpoint not found' });
-});
+  if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    app.use(express.static(path.join(__dirname, 'dist')));
+    app.get('*all', (req, res) => {
+      res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+    });
+  }
 
   // WebSocket setup
   let wss: WebSocketServer;
@@ -2757,8 +2964,8 @@ app.use((req, res) => {
     });
   };
 
-    const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Nexus Proxy Server running on http://0.0.0.0:${PORT}`);
+  const server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Nexus Proxy Server running on http://localhost:${PORT}`);
   });
 
   wss = new WebSocketServer({ server, path: '/ws' });
