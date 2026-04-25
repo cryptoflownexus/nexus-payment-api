@@ -346,7 +346,7 @@ async function createBitgetTrailingStop({
 async function startServer() {
   const app = express();
   app.set('trust proxy', 1); // Trust first proxy for express-rate-limit
-  const PORT = 3000;
+  const PORT = process.env.PORT || 3000;
 
   // Anti-DDoS & Security Headers
   app.use(helmet({
