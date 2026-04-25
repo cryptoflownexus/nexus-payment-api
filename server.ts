@@ -346,7 +346,7 @@ async function createBitgetTrailingStop({
 async function startServer() {
   const app = express();
   app.set('trust proxy', 1); // Trust first proxy for express-rate-limit
-  const PORT = process.env.PORT || 3000;
+  const PORT = 3000;
 
   // Anti-DDoS & Security Headers
   app.use(helmet({
@@ -356,7 +356,7 @@ async function startServer() {
 
   const globalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100000, // Very high limit
+    max: 1000, // Limit each IP to 1000 requests per window
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many requests from this IP, please try again later.' },
@@ -368,7 +368,7 @@ async function startServer() {
   // Stricter rate limit for trading and exchange-related APIs
   const tradingLimiter = rateLimit({
     windowMs: 5 * 60 * 1000, // 5 minutes
-    max: 50000, // Very high limit
+    max: 300, // Limit each IP to 300 requests per 5 minutes for trading
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many requests to trading API from this IP, please try again later.' },
@@ -2862,8 +2862,7 @@ async function startServer() {
         limit.resetTime = now + 60000;
       } else {
         limit.count++;
-        // Very high limit to avoid 429
-        if (limit.count > 50000) {
+        if (limit.count > 600) {
           return res.status(429).json({ error: 'Rate limit exceeded. Please slow down.' });
         }
       }
