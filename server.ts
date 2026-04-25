@@ -10,55 +10,9 @@ import { fileURLToPath } from 'url';
 import ccxt, { binance, bitget } from 'ccxt';
 import { PassThrough } from 'stream';
 import { WebSocketServer, WebSocket } from 'ws';
-import crypto from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// ============================================================
-// 🔥 AES-256-GCM SECURITY MODULE
-// ============================================================
-const ENCRYPTION_MASTER_KEY = process.env.ENCRYPTION_MASTER_KEY || crypto.randomBytes(32).toString('hex');
-
-function encryptAPIKey(text: string): string {
-  if (!text) return text;
-  if (text.startsWith('ENC:')) return text; // already encrypted
-  try {
-    const iv = crypto.randomBytes(12);
-    // Ensure key is exactly 32 bytes (256 bits)
-    const keyString = ENCRYPTION_MASTER_KEY.padEnd(64, '0').slice(0, 64);
-    const key = Buffer.from(keyString, 'hex');
-    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-    let encrypted = cipher.update(text, 'utf8', 'hex');
-    encrypted += cipher.final('hex');
-    const authTag = cipher.getAuthTag().toString('hex');
-    return `ENC:${iv.toString('hex')}:${authTag}:${encrypted}`;
-  } catch (error) {
-    console.error('[Security] Encryption failed:', error);
-    return text; // Fallback to raw if encrypt fails
-  }
-}
-
-function decryptAPIKey(encryptedText: string): string {
-  if (!encryptedText || !encryptedText.startsWith('ENC:')) return encryptedText;
-  try {
-    const parts = encryptedText.split(':');
-    if (parts.length !== 4) return encryptedText;
-    const [_, ivHex, authTagHex, cipherText] = parts;
-    const iv = Buffer.from(ivHex, 'hex');
-    const authTag = Buffer.from(authTagHex, 'hex');
-    const keyString = ENCRYPTION_MASTER_KEY.padEnd(64, '0').slice(0, 64);
-    const key = Buffer.from(keyString, 'hex');
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
-    decipher.setAuthTag(authTag);
-    let decrypted = decipher.update(cipherText, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    return decrypted;
-  } catch (error) {
-    console.error('[Security] Decryption failed:', error);
-    return ''; // Return empty string to prevent sending garbage to CCXT
-  }
-}
 
 // ============================================================
 // 🔥 PAYMENT GATEWAY (XENDIT & STRIPE HYBRID)
@@ -346,7 +300,7 @@ async function createBitgetTrailingStop({
 async function startServer() {
   const app = express();
   app.set('trust proxy', 1); // Trust first proxy for express-rate-limit
-  const PORT = process.env.PORT || 3000;
+  const PORT = 3000;
 
   // Anti-DDoS & Security Headers
   app.use(helmet({
@@ -356,7 +310,7 @@ async function startServer() {
 
   const globalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100000, // Very high limit
+    max: 1000, // Limit each IP to 1000 requests per window
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many requests from this IP, please try again later.' },
@@ -368,7 +322,7 @@ async function startServer() {
   // Stricter rate limit for trading and exchange-related APIs
   const tradingLimiter = rateLimit({
     windowMs: 5 * 60 * 1000, // 5 minutes
-    max: 50000, // Very high limit
+    max: 300, // Limit each IP to 300 requests per 5 minutes for trading
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many requests to trading API from this IP, please try again later.' },
@@ -469,30 +423,6 @@ async function startServer() {
   });
 
   app.use(express.json());
-
-  // ===================================
-  // 🔥 SECURITY ENCRYPTION ENDPOINT
-  // ===================================
-  app.post('/api/security/encrypt', async (req, res) => {
-    try {
-      const { payload } = req.body;
-      if (!payload || typeof payload !== 'object') {
-        return res.status(400).json({ error: 'Invalid payload' });
-      }
-      const encryptedPayload: any = {};
-      for (const [key, value] of Object.entries(payload)) {
-        if (typeof value === 'string' && value && !value.startsWith('ENC:')) {
-          encryptedPayload[key] = encryptAPIKey(value);
-        } else {
-          encryptedPayload[key] = value;
-        }
-      }
-      res.json({ success: true, data: encryptedPayload });
-    } catch (error: any) {
-      console.error('[Security API] Encrypt failed:', error);
-      res.status(500).json({ error: error.message });
-    }
-  });
 
   // URL rewrite middleware for backward compatibility with stale browser tabs
   app.use((req, res, next) => {
@@ -928,15 +858,7 @@ async function startServer() {
   const initializationPromises = new Map<string, Promise<any>>();
   const failedExchanges = new Map<string, { ts: number, error: string }>();
 
-  const getExchangeInstance = async (type: string, inputKeys: any) => {
-    if (!inputKeys) throw new Error("Missing exchange keys");
-    
-    // 🔥 Securely decrypt keys memory-only before initiating connection
-    const keys = { ...inputKeys };
-    if (keys.apiKey) keys.apiKey = decryptAPIKey(keys.apiKey);
-    if (keys.secret) keys.secret = decryptAPIKey(keys.secret);
-    if (keys.password) keys.password = decryptAPIKey(keys.password); // Bitget passphrase
-
+  const getExchangeInstance = async (type: string, keys: any) => {
     const cacheKey = `${type}-${keys.apiKey}`;
     
     if (exchangeCache.has(cacheKey) && cacheKey !== `${type}-undefined` && cacheKey !== `${type}-`) {
@@ -2862,8 +2784,7 @@ async function startServer() {
         limit.resetTime = now + 60000;
       } else {
         limit.count++;
-        // Very high limit to avoid 429
-        if (limit.count > 50000) {
+        if (limit.count > 600) {
           return res.status(429).json({ error: 'Rate limit exceeded. Please slow down.' });
         }
       }
