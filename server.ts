@@ -2,6 +2,8 @@ import 'dotenv/config';
 import express from 'express';
 // import { createServer as createViteServer } from 'vite';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -297,7 +299,37 @@ async function createBitgetTrailingStop({
 // ============================================================
 async function startServer() {
   const app = express();
+  app.set('trust proxy', 1); // Trust first proxy for express-rate-limit
   const PORT = 3000;
+
+  // Anti-DDoS & Security Headers
+  app.use(helmet({
+    contentSecurityPolicy: false, // Let Vite/Tauri handle CSP
+    crossOriginEmbedderPolicy: false
+  }));
+
+  const globalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 1000, // Limit each IP to 1000 requests per window
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests from this IP, please try again later.' },
+    validate: { xForwardedForHeader: false, trustProxy: false }
+  });
+  
+  app.use('/api', globalLimiter);
+
+  // Stricter rate limit for trading and exchange-related APIs
+  const tradingLimiter = rateLimit({
+    windowMs: 5 * 60 * 1000, // 5 minutes
+    max: 300, // Limit each IP to 300 requests per 5 minutes for trading
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests to trading API from this IP, please try again later.' },
+    validate: { xForwardedForHeader: false, trustProxy: false }
+  });
+  
+  app.use('/api/portal', tradingLimiter);
 
   app.use(cors({
     origin: (origin, callback) => {
@@ -2737,16 +2769,16 @@ async function startServer() {
     }
   });
 
-  const rateLimit = new Map<string, { count: number; resetTime: number }>();
+  const manualRateLimitMap = new Map<string, { count: number; resetTime: number }>();
   
   app.use('/api', (req, res, next) => {
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
     const now = Date.now();
     
-    if (!rateLimit.has(ip)) {
-      rateLimit.set(ip, { count: 1, resetTime: now + 60000 });
+    if (!manualRateLimitMap.has(ip)) {
+      manualRateLimitMap.set(ip, { count: 1, resetTime: now + 60000 });
     } else {
-      const limit = rateLimit.get(ip)!;
+      const limit = manualRateLimitMap.get(ip)!;
       if (now > limit.resetTime) {
         limit.count = 1;
         limit.resetTime = now + 60000;
@@ -2763,9 +2795,9 @@ async function startServer() {
 
   setInterval(() => {
     const now = Date.now();
-    for (const [ip, limit] of rateLimit.entries()) {
+    for (const [ip, limit] of manualRateLimitMap.entries()) {
       if (now > limit.resetTime) {
-        rateLimit.delete(ip);
+        manualRateLimitMap.delete(ip);
       }
     }
   }, 60000);
