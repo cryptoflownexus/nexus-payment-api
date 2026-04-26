@@ -828,6 +828,55 @@ async function startServer() {
   });
 
   // ===================================
+  // DELETE ACCOUNT API
+  // ===================================
+  app.post('/api/auth/delete-account', async (req, res) => {
+    try {
+      const { userId } = req.body;
+      const authHeader = req.headers.authorization;
+
+      if (!userId || !authHeader) {
+         return res.status(400).json({ error: 'Missing userId or authorization header' });
+      }
+
+      if (!process.env.SUPABASE_SERVICE_ROLE_KEY || !process.env.VITE_SUPABASE_URL) {
+         return res.status(500).json({ error: 'Server configuration missing for Supabase.' });
+      }
+
+      const { createClient } = await import('@supabase/supabase-js');
+      const supabaseAdmin = createClient(process.env.VITE_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+
+      // Verify the auth token actually belongs to the user
+      const token = authHeader.replace('Bearer ', '');
+      const { data: { user }, error: verifyError } = await supabaseAdmin.auth.getUser(token);
+
+      if (verifyError || !user) {
+         return res.status(401).json({ error: 'Invalid or expired token.' });
+      }
+
+      if (user.id !== userId) {
+         return res.status(403).json({ error: 'Forbidden: Cannot delete another user.' });
+      }
+
+      // Delete optional relations first in case there are no ON DELETE CASCADE constraints
+      await supabaseAdmin.from('payment_history').delete().eq('user_id', userId);
+      await supabaseAdmin.from('profiles').delete().eq('id', userId);
+
+      // Proceed to delete the user
+      const { error: deleteError } = await supabaseAdmin.auth.admin.deleteUser(userId);
+
+      if (deleteError) {
+         throw deleteError;
+      }
+
+      res.json({ success: true, message: 'Account deleted successfully.' });
+    } catch (err: any) {
+      console.error('[Delete Account API] Error:', err);
+      res.status(500).json({ error: err.message || 'Internal Server Error' });
+    }
+  });
+
+  // ===================================
   // PAYMENT HISTORY API
   // ===================================
   app.post('/api/payment/history', async (req, res) => {
