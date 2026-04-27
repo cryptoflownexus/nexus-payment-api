@@ -671,7 +671,7 @@ async function startServer() {
     // Accept it to prevent retries
     res.json({ received: true });
 
-    if (invoice.status === 'PAID') {
+    if (invoice.status === 'PAID' || invoice.status === 'SETTLED') {
       const userId = invoice.metadata?.userId;
       const planId = (invoice.metadata?.planId || 'premium').toLowerCase();
 
@@ -688,8 +688,7 @@ async function startServer() {
               const { error: profileError } = await supabase.from('profiles').update({
                 plan_tier: planId,
                 subscription_status: 'active',
-                xendit_customer_id: invoice.customer_id || 'xendit-guest',
-                updated_at: new Date().toISOString()
+                xendit_customer_id: invoice.customer_id || 'xendit-guest'
               }).eq('id', userId);
 
               if (profileError) {
@@ -786,15 +785,14 @@ async function startServer() {
         const data = await response.json();
         
         if (data && data.length > 0) {
-           const matchingInvoice = data.find((inv: any) => inv.status === 'PAID');
+           const matchingInvoice = data.find((inv: any) => inv.status === 'PAID' || inv.status === 'SETTLED');
            if (matchingInvoice) {
               const userId = matchingInvoice.metadata?.userId;
               const planId = (matchingInvoice.metadata?.planId || 'premium').toLowerCase();
               if (userId && planId) {
                 const { error: updateErr } = await supabase.from('profiles').update({
                   plan_tier: planId,
-                  subscription_status: 'active',
-                  updated_at: new Date().toISOString()
+                  subscription_status: 'active'
                 }).eq('id', userId);
 
                 if (updateErr) {
